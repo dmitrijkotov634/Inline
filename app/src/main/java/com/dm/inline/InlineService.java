@@ -40,6 +40,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import com.dm.inline.ArgumentTokenizer;
+import android.os.Build;
 
 public class InlineService extends AccessibilityService {
 
@@ -119,7 +120,9 @@ public class InlineService extends AccessibilityService {
         try {
             node = event.getSource();
 
-            if (node != null && event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && node.isEditable() && node.getText() != null) {
+            if (node != null && event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && node.isEditable()
+                && node.getText() != null && (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
+
                 String text = node.getText().toString();
 
                 for (LuaValue watcher : watchers.values()) {
