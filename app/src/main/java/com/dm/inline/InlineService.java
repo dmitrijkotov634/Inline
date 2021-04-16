@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.widget.Toast;
 import android.os.Bundle;
+import android.os.Build;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.preference.PreferenceManager;
@@ -40,7 +41,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import com.dm.inline.ArgumentTokenizer;
-import android.os.Build;
 
 public class InlineService extends AccessibilityService {
 
@@ -117,62 +117,69 @@ public class InlineService extends AccessibilityService {
     }
 
 	public void onAccessibilityEvent(AccessibilityEvent event) {
-        try {
-            node = event.getSource();
+        node = event.getSource();
 
-            if (node != null && event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && node.isEditable()
-                && node.getText() != null && (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
+        if (node != null && event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && node.isEditable()
+            && node.getText() != null && (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
 
-                String text = node.getText().toString();
+            String text = node.getText().toString();
 
-                for (LuaValue watcher : watchers.values()) {
+            for (LuaValue watcher : watchers.values()) {
+                try {
+                    watcher.call(text);
+                } catch (Exception e) {
+                    logError(e);
+                }
+            }
+
+            Matcher m = Pattern.compile("\\{.+\\}\\$", Pattern.DOTALL).matcher(text);
+
+            while (m.find()) {
+                String[] args = m.group(0).substring(1, m.group(0).length() - 2).split(" ", 2);
+
+                if (args.length > 0) {
+                    LuaValue value = env;
+
+                    for (String path : args[0].split("\\.")) {
+                        if ((value = value.get(path)).isnil())
+                            break;
+                    }
+
                     try {
-                        watcher.call(text);
+                        switch (value.type()) {
+                            case LuaValue.TFUNCTION:
+                                LuaValue result = args.length == 1 ? value.call() : value.call(args[1]);
+
+                                if (result.isnil())
+                                    continue;
+                                else
+                                    text = text.replace(m.group(0), result.tojstring());
+                                break;
+
+                            case LuaValue.TNUMBER:
+                            case LuaValue.TSTRING:
+                            case LuaValue.TBOOLEAN:
+                                text = text.replace(m.group(0), value.tojstring());
+                                break;
+
+                            default:
+                                continue;
+                        }
+
+                        Bundle arg = new Bundle();
+                        arg.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arg);
+
+                        arg = new Bundle();
+                        arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, node.getTextSelectionStart());
+                        arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, node.getTextSelectionEnd());
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, arg);
+                        
                     } catch (Exception e) {
                         logError(e);
                     }
                 }
-
-                Matcher m = Pattern.compile("\\{.+\\}\\$", Pattern.DOTALL).matcher(text);
-
-                while (m.find()) {
-                    String[] args = m.group(0).substring(1, m.group(0).length() - 2).split(" ", 2);
-
-                    if (args.length > 0) {
-                        LuaValue value = env;
-
-                        for (String path : args[0].split("\\.")) {
-                            if ((value = value.get(path)).isnil())
-                                break;
-                        } 
-
-                        if (value.isfunction()) {
-                            try {
-                                LuaValue result = args.length == 1 ? value.call() : value.call(args[1]);
-
-                                if (!result.isnil()) {
-                                    text = text.replace(m.group(0), result.tojstring());
-
-                                    Bundle arg = new Bundle();
-                                    arg.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
-                                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arg);
-
-                                    arg = new Bundle();
-                                    arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, node.getTextSelectionStart());
-                                    arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, node.getTextSelectionEnd());
-                                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, arg);
-                                }
-
-                            } catch (Exception e) {
-                                logError(e);
-                            }
-                        }
-                    }
-                }
             }
-
-        } catch (Exception e) {
-            logError(e);
         }
     }
 
