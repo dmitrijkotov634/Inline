@@ -50,7 +50,7 @@ public class InlineService extends AccessibilityService {
     public SharedPreferences db;
 
     Set<String> defaultPath = new HashSet<String>();
-    public HashMap<LuaValue, LuaValue> watchers = new HashMap<LuaValue, LuaValue>();
+    public HashMap<LuaValue, LuaValue> watchers;
 
     @Override
     protected void onServiceConnected() {
@@ -174,7 +174,7 @@ public class InlineService extends AccessibilityService {
                         arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, node.getTextSelectionStart());
                         arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, node.getTextSelectionEnd());
                         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, arg);
-                        
+
                     } catch (Exception e) {
                         logError(e);
                     }
@@ -270,7 +270,7 @@ public class InlineService extends AccessibilityService {
     }
 
     public class loadModules extends ZeroArgFunction {
-        public void loadFile(File file, String path) {
+        public void loadFile(String path, File file) {
             try {
                 BufferedReader reader = new BufferedReader(new FileReader(file));
 
@@ -279,42 +279,52 @@ public class InlineService extends AccessibilityService {
                 if (ch != 65279)
                     reader.reset();
 
-                env.load(reader, path + file.getName()).call();
+                String rpath = path + file.getName();
+                prepare(env.load(reader, rpath).call(), rpath);
             } catch (Exception e) {
                 logError(e);
             }
         }
 
-        public void loadAsset(AssetManager assets, String path) {
+        public void loadAsset(String path, AssetManager assets) {
             try {
                 InputStream stream = assets.open(path);
                 byte[] buffer = new byte[stream.available()];
                 stream.read(buffer);
-                env.load(new String(buffer), "/assets/" + path).call();
+
+                String rpath = "/assets/" + path;
+                prepare(env.load(new String(buffer), rpath).call(), rpath);
             } catch (Exception e) {
                 logError(e);
             }
         }
 
+        public void prepare(LuaValue value, String path) {
+            if (value.isfunction())
+                watchers.put(valueOf(path), value);
+        }
+
         public LuaValue call() {
+            watchers = new HashMap<LuaValue, LuaValue>();
+
             for (String path : db.getStringSet("path", defaultPath))
                 if (path.startsWith("/assets/")) {
                     AssetManager assets = getResources().getAssets();
                     String assetPath = path.substring(8);
 
-                    String[] files = null;
+                    String[] files = {};
 
                     try {
                         files = assets.list(assetPath.substring(0, assetPath.length() - 1));
-
-                        if (files.length > 0)
-                            for (String file : files)
-                                loadAsset(assets, assetPath + file);
-                        else
-                            loadAsset(assets, assetPath);
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
+
+                    if (files.length > 0)
+                        for (String file : files)
+                            loadAsset(assetPath + file, assets);
+                    else
+                        loadAsset(assetPath, assets);
                 } else {
                     try {
                         File module = new File(path);
@@ -322,9 +332,9 @@ public class InlineService extends AccessibilityService {
                         if (module.isDirectory()) {
                             for (File file : module.listFiles())
                                 if (file.isFile())
-                                    loadFile(file, path);
+                                    loadFile(path, file);
                         } else if (module.isFile()) {
-                            loadFile(module, path);
+                            loadFile(path, module);
                         }
                     } catch (Exception e) {
                         e.printStackTrace();

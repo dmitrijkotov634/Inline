@@ -18,16 +18,14 @@ public class utils extends TwoArgFunction {
         env.set("utils", library);
         return library;
     }
-
-    public class getArgs extends OneArgFunction {
-        public LuaValue call(LuaValue string) {
+    
+    public class getArgs extends TwoArgFunction {
+        public LuaValue call(LuaValue string, LuaValue maxSplit) {
             LuaTable value = new LuaTable();
-
             int index = 1;
-            for (String arg : ArgumentTokenizer.tokenize(string.tojstring())) {
+            for (String arg : ArgumentTokenizer.tokenize(string.tojstring(), maxSplit.isint() ? maxSplit.toint() : -1, false)) {
                 value.set(index++, arg);
             }
-
             return value;
         }
     }
@@ -35,13 +33,11 @@ public class utils extends TwoArgFunction {
     public class split extends ThreeArgFunction {
         public LuaValue call(LuaValue string, LuaValue pattern, LuaValue maxCount) {
             LuaTable value = new LuaTable();
-
             int index = 1;
             for (String sub : string.tojstring().split(pattern.isnil() ? " " : pattern.tojstring(),
-                                                      maxCount.isnil() ? -1 : maxCount.toint())) {
+                                                      maxCount.isint() ? maxCount.toint() : -1)) {
                 value.set(index++, sub);
             }
-
             return value;
         }
     }

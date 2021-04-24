@@ -9,74 +9,74 @@ public abstract class ArgumentTokenizer {
     private static final int SINGLE_QUOTE_STATE = 2;
     private static final int DOUBLE_QUOTE_STATE = 3;
 
-    public static List<String> tokenize(String arguments) {
-        return tokenize(arguments, false);
-    }
-
-    public static List<String> tokenize(String arguments, boolean stringify) {
-
+    public static List<String> tokenize(String arguments, int maxSplit, boolean stringify) {
         LinkedList<String> argList = new LinkedList<String>();
         StringBuilder currArg = new StringBuilder();
         boolean escaped = false;
         int state = NO_TOKEN_STATE;
-        int len = arguments.length();
 
-        for (int i = 0; i < len; i++) {
+        for (int i = 0; i < arguments.length(); i++) {
             char c = arguments.charAt(i);
             if (escaped) {
                 escaped = false;
                 currArg.append(c);
             } else {
-                switch (state) {
-                    case SINGLE_QUOTE_STATE:
-                        if (c == '\'') {
-                            state = NORMAL_TOKEN_STATE;
-                        } else {
-                            currArg.append(c);
-                        }
-                        break;
-                    case DOUBLE_QUOTE_STATE:
-                        if (c == '"') {
-                            state = NORMAL_TOKEN_STATE;
-                        } else if (c == '\\') {
-                            i++;
-                            char next = arguments.charAt(i);
-                            if (next == '"' || next == '\\') {
-                                currArg.append(next);
+                if (maxSplit > 0 && argList.size() < maxSplit) {
+                    currArg.append(arguments.substring(i));
+                    state = NORMAL_TOKEN_STATE;
+                    break;
+                } else {
+                    switch (state) {
+                        case SINGLE_QUOTE_STATE:
+                            if (c == '\'') {
+                                state = NORMAL_TOKEN_STATE;
                             } else {
                                 currArg.append(c);
-                                currArg.append(next);
                             }
-                        } else {
-                            currArg.append(c);
-                        }
-                        break;
-                    case NO_TOKEN_STATE:
-                    case NORMAL_TOKEN_STATE:
-                        switch (c) {
-                            case '\\':
-                                escaped = true;
+                            break;
+                        case DOUBLE_QUOTE_STATE:
+                            if (c == '"') {
                                 state = NORMAL_TOKEN_STATE;
-                                break;
-                            case '\'':
-                                state = SINGLE_QUOTE_STATE;
-                                break;
-                            case '"':
-                                state = DOUBLE_QUOTE_STATE;
-                                break;
-                            default:
-                                if (!Character.isWhitespace(c)) {
+                            } else if (c == '\\') {
+                                i++;
+                                char next = arguments.charAt(i);
+                                if (next == '"' || next == '\\') {
+                                    currArg.append(next);
+                                } else {
                                     currArg.append(c);
-                                    state = NORMAL_TOKEN_STATE;
-                                } else if (state == NORMAL_TOKEN_STATE) {
-                                    argList.add(currArg.toString());
-                                    currArg = new StringBuilder();
-                                    state = NO_TOKEN_STATE;
+                                    currArg.append(next);
                                 }
-                        }
-                        break;
-                    default:
-                        throw new IllegalStateException("ArgumentTokenizer state " + state + " is invalid!");
+                            } else {
+                                currArg.append(c);
+                            }
+                            break;
+                        case NO_TOKEN_STATE:
+                        case NORMAL_TOKEN_STATE:
+                            switch (c) {
+                                case '\\':
+                                    escaped = true;
+                                    state = NORMAL_TOKEN_STATE;
+                                    break;
+                                case '\'':
+                                    state = SINGLE_QUOTE_STATE;
+                                    break;
+                                case '"':
+                                    state = DOUBLE_QUOTE_STATE;
+                                    break;
+                                default:
+                                    if (!Character.isWhitespace(c)) {
+                                        currArg.append(c);
+                                        state = NORMAL_TOKEN_STATE;
+                                    } else if (state == NORMAL_TOKEN_STATE) {
+                                        argList.add(currArg.toString());
+                                        currArg = new StringBuilder();
+                                        state = NO_TOKEN_STATE;
+                                    }
+                            }
+                            break;
+                        default:
+                            throw new IllegalStateException("ArgumentTokenizer state " + state + " is invalid!");
+                    }
                 }
             }
         }
@@ -98,7 +98,7 @@ public abstract class ArgumentTokenizer {
 
     protected static String _escapeQuotesAndBackslashes(String s) {
         final StringBuilder buf = new StringBuilder(s);
-        
+
         for (int i = s.length() - 1; i >= 0; i--) {
             char c = s.charAt(i);
             if ((c == '\\') || (c == '"')) {
