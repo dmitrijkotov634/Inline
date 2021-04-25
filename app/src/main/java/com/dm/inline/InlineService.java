@@ -41,10 +41,15 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import com.dm.inline.ArgumentTokenizer;
+import android.content.ClipboardManager;
+import android.content.ClipData;
+import android.content.Context;
 
 public class InlineService extends AccessibilityService {
 
+    public ClipboardManager clipboard;
     public AccessibilityNodeInfo node;
+    public Bundle arg;
 
     public Globals env;
     public SharedPreferences db;
@@ -64,6 +69,8 @@ public class InlineService extends AccessibilityService {
         info.eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED;
 		info.feedbackType = AccessibilityServiceInfo.FEEDBACK_ALL_MASK;
 		setServiceInfo(info);
+
+        clipboard = (ClipboardManager) getApplicationContext().getSystemService(CLIPBOARD_SERVICE);
 
         db = getSharedPreferences("db", MODE_PRIVATE);
 
@@ -110,6 +117,21 @@ public class InlineService extends AccessibilityService {
 
         inline.set("db", db.setmetatable(mdb));
 
+        LuaTable clipboard = new LuaTable();
+        clipboard.set("sethtml", new setHtml());
+        clipboard.set("set", new setClip());
+        clipboard.set("get", new getClip());
+        clipboard.set("has", new hasClip());
+        clipboard.set("clear", new clearClip());
+
+        inline.set("clipboard", clipboard);
+
+        LuaTable format = new LuaTable();
+        format.set("fromclipboard", new FromClipboardFlag());
+        format.set("fromhtml", new fromHtml());
+
+        inline.set("fmt", format);
+
         env.set("inline", inline);
         env.set("cake", LuaValue.FALSE);
 
@@ -134,6 +156,7 @@ public class InlineService extends AccessibilityService {
 
             Matcher m = Pattern.compile("\\{.+\\}\\$", Pattern.DOTALL).matcher(text);
 
+            expressions:
             while (m.find()) {
                 String[] args = m.group(0).substring(1, m.group(0).length() - 2).split(" ", 2);
 
@@ -146,27 +169,32 @@ public class InlineService extends AccessibilityService {
                     }
 
                     try {
-                        switch (value.type()) {
-                            case LuaValue.TFUNCTION:
-                                LuaValue result = args.length == 1 ? value.call() : value.call(args[1]);
+                        find:
+                        while (true) {
+                            switch (value.type()) {
+                                case LuaValue.TFUNCTION:
+                                    value = args.length == 1 ? value.call() : value.call(args[1]);
+                                    break;
 
-                                if (result.isnil())
-                                    continue;
-                                else
-                                    text = text.replace(m.group(0), result.tojstring());
-                                break;
+                                case LuaValue.TNUMBER:
+                                case LuaValue.TSTRING:
+                                case LuaValue.TBOOLEAN:
+                                    text = text.replace(m.group(0), value.tojstring());
+                                    break find;
 
-                            case LuaValue.TNUMBER:
-                            case LuaValue.TSTRING:
-                            case LuaValue.TBOOLEAN:
-                                text = text.replace(m.group(0), value.tojstring());
-                                break;
+                                case 10:
+                                    arg = new Bundle();
+                                    arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, m.start());
+                                    arg.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, m.end());
+                                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, arg);
+                                    node.performAction(AccessibilityNodeInfo.ACTION_PASTE);
 
-                            default:
-                                continue;
+                                default:
+                                    continue expressions;
+                            }
                         }
 
-                        Bundle arg = new Bundle();
+                        arg = new Bundle();
                         arg.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text);
                         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arg);
 
@@ -365,6 +393,62 @@ public class InlineService extends AccessibilityService {
             else                  
                 watchers.put(name, watcher);
             return NIL;
+        }
+    }
+
+    // Clipboard
+
+
+    public class setHtml extends TwoArgFunction {
+        public LuaValue call(LuaValue text, LuaValue html) {
+            clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.tojstring(), html.tojstring()));
+            return NIL;
+        }
+    }
+
+    public class setClip extends OneArgFunction {
+        public LuaValue call(LuaValue text) {
+            clipboard.setPrimaryClip(ClipData.newPlainText(null, text.tojstring()));
+            return NIL;
+        }
+    }
+
+    public class getClip extends ZeroArgFunction {
+        public LuaValue call() {
+            ClipData clip = clipboard.getPrimaryClip();
+            return valueOf(clip.getItemAt(0).coerceToHtmlText(getApplicationContext()));
+        }
+    }
+
+    public class hasClip extends ZeroArgFunction {
+        public LuaValue call() {
+            return valueOf(clipboard.hasPrimaryClip());
+        }
+    }
+
+    public class clearClip extends ZeroArgFunction {
+        public LuaValue call() {
+            clipboard.clearPrimaryClip();
+            return NIL;
+        }
+    }
+
+    // Format
+
+    public class fromHtml extends OneArgFunction {
+        public LuaValue call(LuaValue html) {
+            clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.tojstring()));
+            return new FromClipboardFlag();
+        }
+    }
+
+    public class FromClipboardFlag extends LuaValue {
+        public int type() {
+            return 10;
+        }
+
+        public String typename() {
+            return "formatflag";
         }
     }
 

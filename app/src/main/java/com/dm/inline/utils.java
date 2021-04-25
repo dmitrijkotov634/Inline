@@ -1,5 +1,5 @@
 package com.dm.inline;
-import org.luaj.vm2.lib.OneArgFunction;
+
 import org.luaj.vm2.lib.TwoArgFunction;
 import org.luaj.vm2.lib.ThreeArgFunction;
 import org.luaj.vm2.LuaValue;
