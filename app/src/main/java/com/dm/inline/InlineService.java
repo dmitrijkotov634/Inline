@@ -9,6 +9,8 @@ import android.view.KeyEvent;
 import android.widget.Toast;
 import android.os.Bundle;
 import android.os.Build;
+import android.content.ClipboardManager;
+import android.content.ClipData;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.preference.PreferenceManager;
@@ -41,9 +43,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import com.dm.inline.ArgumentTokenizer;
-import android.content.ClipboardManager;
-import android.content.ClipData;
-import android.content.Context;
 
 public class InlineService extends AccessibilityService {
 
@@ -141,10 +140,10 @@ public class InlineService extends AccessibilityService {
 	public void onAccessibilityEvent(AccessibilityEvent event) {
         node = event.getSource();
 
-        if (node != null && event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && node.isEditable()
-            && node.getText() != null && (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
+        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
+            (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
 
-            String text = node.getText().toString();
+            String text = node.getText() == null ? "" : node.getText().toString();
 
             for (LuaValue watcher : watchers.values()) {
                 try {
@@ -212,7 +211,7 @@ public class InlineService extends AccessibilityService {
     }
 
     public void logError(Exception e) {
-        Toast toast = Toast.makeText(getApplicationContext(), e.toString(), 0);
+        Toast toast = Toast.makeText(getApplicationContext(), e.toString(), 1);
         toast.setGravity(Gravity.CENTER, 0, 0);
         toast.show();
 
@@ -228,7 +227,6 @@ public class InlineService extends AccessibilityService {
             args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start.toint() - 1);
             args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end.isnil() ? start.toint() - 1 : end.toint() - 1);
             node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args);
-
             return NIL;
         }
     }
@@ -285,7 +283,7 @@ public class InlineService extends AccessibilityService {
 
     public class toast extends OneArgFunction {
         public LuaValue call(LuaValue text) {
-            Toast.makeText(getApplicationContext(), text.tojstring(), 0).show();
+            Toast.makeText(getApplicationContext(), text.tojstring(), 1).show();
             return NIL;
         }
     }
@@ -307,8 +305,8 @@ public class InlineService extends AccessibilityService {
                 if (ch != 65279)
                     reader.reset();
 
-                String rpath = path + file.getName();
-                prepare(env.load(reader, rpath).call(), rpath);
+                String rpath;
+                prepare(env.load(reader, rpath = path + file.getName()).call(), rpath);
             } catch (Exception e) {
                 logError(e);
             }
@@ -320,8 +318,8 @@ public class InlineService extends AccessibilityService {
                 byte[] buffer = new byte[stream.available()];
                 stream.read(buffer);
 
-                String rpath = "/assets/" + path;
-                prepare(env.load(new String(buffer), rpath).call(), rpath);
+                String rpath;
+                prepare(env.load(new String(buffer), rpath = "/assets/" + path).call(), rpath);
             } catch (Exception e) {
                 logError(e);
             }
@@ -376,7 +374,7 @@ public class InlineService extends AccessibilityService {
 
     public class getWatcher extends TwoArgFunction {
         public LuaValue call(LuaValue table, LuaValue name) {
-            return watchers.get(name);
+            return watchers.containsKey(name) ? watchers.get(name) : NIL;
         }
     }
 
@@ -388,16 +386,19 @@ public class InlineService extends AccessibilityService {
 
     public class putWatcher extends ThreeArgFunction {
         public LuaValue call(LuaValue table, LuaValue name, LuaValue watcher) {
-            if (watcher.isnil())
-                watchers.remove(name);
-            else                  
+            if (watcher.isnil()) {
+                if (watchers.containsKey(name)) {
+                    watchers.remove(name);
+                }
+            } else {
                 watchers.put(name, watcher);
+            }
+
             return NIL;
         }
     }
 
     // Clipboard
-
 
     public class setHtml extends TwoArgFunction {
         public LuaValue call(LuaValue text, LuaValue html) {
@@ -531,7 +532,6 @@ public class InlineService extends AccessibilityService {
                     db.edit().remove(key.tojstring()).apply();
                 else
                 if (value.isnumber()) {
-
                     if (value.isint())
                         db.edit().putInt(key.tojstring(), value.toint()).apply();
                     if (value.islong())
