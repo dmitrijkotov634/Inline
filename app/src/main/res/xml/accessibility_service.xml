@@ -4,5 +4,6 @@
     android:accessibilityFlags="flagDefault"
     android:accessibilityFeedbackType="feedbackAllMask"
     android:canRetrieveWindowContent="true"
+    android:settingsActivity="com.dm.inline.activities.ExplorerActivity"
 />
 

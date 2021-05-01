@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Build;
 import android.content.ClipboardManager;
 import android.content.ClipData;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.preference.PreferenceManager;
@@ -42,12 +43,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
-import com.dm.inline.ArgumentTokenizer;
 
 public class InlineService extends AccessibilityService {
 
+    private static InlineService sharedInstance;
+
     public ClipboardManager clipboard;
-    public AccessibilityNodeInfo node;
     public Bundle arg;
 
     public Globals env;
@@ -69,8 +70,9 @@ public class InlineService extends AccessibilityService {
 		info.feedbackType = AccessibilityServiceInfo.FEEDBACK_ALL_MASK;
 		setServiceInfo(info);
 
-        clipboard = (ClipboardManager) getApplicationContext().getSystemService(CLIPBOARD_SERVICE);
+        sharedInstance = this;
 
+        clipboard = (ClipboardManager) getApplicationContext().getSystemService(CLIPBOARD_SERVICE);
         db = getSharedPreferences("db", MODE_PRIVATE);
 
         defaultPath.add("/assets/modules/");
@@ -82,15 +84,6 @@ public class InlineService extends AccessibilityService {
         LuaValue loader = new loadModules();
 
         LuaTable inline = new LuaTable();
-        inline.set("setselection", new setSelection());
-        inline.set("getselection", new getSelection());
-        inline.set("copy", new copy());
-        inline.set("cut", new cut());
-        inline.set("paste", new paste());
-        inline.set("ismultiline", new isMultiLine());
-        inline.set("getpackage", new getPackage());
-        inline.set("settext", new setText());
-        inline.set("gettext", new getText());
         inline.set("toast", new toast());
         inline.set("loadmodules", loader);
 
@@ -130,6 +123,7 @@ public class InlineService extends AccessibilityService {
         format.set("fromhtml", new fromHtml());
 
         inline.set("fmt", format);
+        inline.set("context", new InlineContext());
 
         env.set("inline", inline);
         env.set("cake", LuaValue.FALSE);
@@ -138,7 +132,7 @@ public class InlineService extends AccessibilityService {
     }
 
 	public void onAccessibilityEvent(AccessibilityEvent event) {
-        node = event.getSource();
+        AccessibilityNodeInfo node = event.getSource();
 
         if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
             (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
@@ -147,7 +141,7 @@ public class InlineService extends AccessibilityService {
 
             for (LuaValue watcher : watchers.values()) {
                 try {
-                    watcher.call(text);
+                    watcher.call(new InlineContext(node));
                 } catch (Exception e) {
                     logError(e);
                 }
@@ -172,7 +166,8 @@ public class InlineService extends AccessibilityService {
                         while (true) {
                             switch (value.type()) {
                                 case LuaValue.TFUNCTION:
-                                    value = args.length == 1 ? value.call() : value.call(args[1]);
+                                    LuaValue context = new InlineContext(node);
+                                    value = args.length == 1 ? value.call(context) : value.call(context, LuaValue.valueOf(args[1]));
                                     break;
 
                                 case LuaValue.TNUMBER:
@@ -210,6 +205,17 @@ public class InlineService extends AccessibilityService {
         }
     }
 
+    public void onInterrupt() {}
+
+    public boolean onUnbind(Intent intent) {
+        sharedInstance = null;
+        return super.onUnbind(intent);
+    }
+
+    public static InlineService getSharedInstance() {
+        return sharedInstance;
+    }
+
     public void logError(Exception e) {
         Toast toast = Toast.makeText(getApplicationContext(), e.toString(), 1);
         toast.setGravity(Gravity.CENTER, 0, 0);
@@ -218,66 +224,98 @@ public class InlineService extends AccessibilityService {
         e.printStackTrace();
     }
 
-    @Override
-    public void onInterrupt() {}
+    public class InlineContext extends LuaTable {
+        public AccessibilityNodeInfo node;
 
-    public class setSelection extends TwoArgFunction {
-        public LuaValue call(LuaValue start, LuaValue end) {
-            Bundle args = new Bundle();
-            args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start.toint() - 1);
-            args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end.isnil() ? start.toint() - 1 : end.toint() - 1);
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args);
-            return NIL;
+        public InlineContext(AccessibilityNodeInfo node) {
+            this();
+
+            this.node = node;
+            set("text", node.getText() == null ? "" : node.getText().toString());
+
+            LuaTable selection = new LuaTable();
+            selection.set("start", node.getTextSelectionStart());
+            selection.set("end", node.getTextSelectionEnd());
+            set("selection", selection);
         }
-    }
 
-    public class getSelection extends VarArgFunction {
-        public Varargs invoke(Varargs v) {
-            return varargsOf(valueOf(node.getTextSelectionStart() + 1), 
-                             valueOf(node.getTextSelectionEnd() + 1));
+        public InlineContext() {
+            set("settext", new setText());
+            set("gettext", new getText());
+            set("setselection", new setSelection());
+            set("getselection", new getSelection());
+            set("cut", new cut());
+            set("copy", new copy());
+            set("paste", new paste());
+            set("ismultiline", new isMultiLine());
+            set("getpackage", new getPackage());
         }
-    }
 
-    public class cut extends ZeroArgFunction {
-        public LuaValue call() {
-            node.performAction(AccessibilityNodeInfo.ACTION_CUT);
-            return NIL;
+        public class setText extends TwoArgFunction {
+            public LuaValue call(LuaValue self, LuaValue text) {
+                Bundle args = new Bundle();
+                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text.isnil() ? "" : text.tojstring());
+                ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+
+                return NIL;
+            }
         }
-    }
 
-    public class copy extends ZeroArgFunction {
-        public LuaValue call() {
-            node.performAction(AccessibilityNodeInfo.ACTION_COPY);
-            return NIL;
+        public class getText extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                CharSequence text = ((InlineContext)self).node.getText();
+                return valueOf(text == null ? "" : text.toString());
+            }
         }
-    }
 
-    public class paste extends ZeroArgFunction {
-        public LuaValue call() {
-            node.performAction(AccessibilityNodeInfo.ACTION_PASTE);
-            return NIL;
+        public class setSelection extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue start, LuaValue end) {
+                Bundle args = new Bundle();
+                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start.toint() - 1);
+                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end.isnil() ? start.toint() - 1 : end.toint() - 1);
+                ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args);
+                return NIL;
+            }
         }
-    }
 
-    public class getPackage extends ZeroArgFunction {
-        public LuaValue call() {
-            return valueOf(node.getPackageName().toString());
+        public class getSelection extends VarArgFunction {
+            public Varargs invoke(Varargs v) {
+                return varargsOf(valueOf(((InlineContext)v.arg1()).node.getTextSelectionStart() + 1), 
+                                 valueOf(((InlineContext)v.arg1()).node.getTextSelectionEnd() + 1));
+            }
         }
-    }
 
-    public class isMultiLine extends ZeroArgFunction {
-        public LuaValue call() {
-            return valueOf(node.isMultiLine());
+        public class cut extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_CUT);
+                return NIL;
+            }
         }
-    }
 
-    public class setText extends OneArgFunction {
-        public LuaValue call(LuaValue text) {
-            Bundle args = new Bundle();
-            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text.isnil() ? "" : text.tojstring());
-            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+        public class copy extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_COPY);
+                return NIL;
+            }
+        }
 
-            return NIL;
+        public class paste extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_PASTE);
+                return NIL;
+            }
+        }
+
+        public class isMultiLine extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                return valueOf(((InlineContext)self).node.isMultiLine());
+            }
+        }
+
+        public class getPackage extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                return valueOf(((InlineContext)self).node.getPackageName().toString());
+            }
         }
     }
 
@@ -285,13 +323,6 @@ public class InlineService extends AccessibilityService {
         public LuaValue call(LuaValue text) {
             Toast.makeText(getApplicationContext(), text.tojstring(), 1).show();
             return NIL;
-        }
-    }
-
-    public class getText extends ZeroArgFunction {
-        public LuaValue call() {
-            CharSequence text = node.getText();
-            return valueOf(text == null ? "" : text.toString());
         }
     }
 
@@ -387,9 +418,8 @@ public class InlineService extends AccessibilityService {
     public class putWatcher extends ThreeArgFunction {
         public LuaValue call(LuaValue table, LuaValue name, LuaValue watcher) {
             if (watcher.isnil()) {
-                if (watchers.containsKey(name)) {
+                if (watchers.containsKey(name))
                     watchers.remove(name);
-                }
             } else {
                 watchers.put(name, watcher);
             }

@@ -1,7 +1,7 @@
-function exec(arg)
+function exec(context, arg)
     return load(arg)(arg)
 end
 
-function eval(arg)
+function eval(context, arg)
     return load("return " .. arg)(arg)
 end

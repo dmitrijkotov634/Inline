@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Inline</string>
+    <string name="explorer">Explorer</string>
     <string name="accessibility_service_description">...</string>
 </resources>

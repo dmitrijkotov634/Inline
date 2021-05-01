@@ -5,6 +5,7 @@ import org.luaj.vm2.lib.ThreeArgFunction;
 import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.LuaTable;
 import java.util.List;
+import com.dm.inline.tools.ArgumentTokenizer;
 
 public class utils extends TwoArgFunction {
 
@@ -18,7 +19,7 @@ public class utils extends TwoArgFunction {
         env.set("utils", library);
         return library;
     }
-    
+
     public class getArgs extends TwoArgFunction {
         public LuaValue call(LuaValue string, LuaValue maxSplit) {
             LuaTable value = new LuaTable();
@@ -35,7 +36,7 @@ public class utils extends TwoArgFunction {
             LuaTable value = new LuaTable();
             int index = 1;
             for (String sub : string.tojstring().split(pattern.isnil() ? " " : pattern.tojstring(),
-                                                      maxCount.isint() ? maxCount.toint() : -1)) {
+                                                       maxCount.isint() ? maxCount.toint() : -1)) {
                 value.set(index++, sub);
             }
             return value;
