@@ -12,14 +12,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import com.dm.inline.R;
 
-public class ExploreAdapter extends BaseAdapter {
+public class ExplorerAdapter extends BaseAdapter {
     private Context context;
     private ArrayList<Varargs> data;
 
     public TextView key;
     public TextView string;
 
-    public ExploreAdapter(Context context, ArrayList<Varargs> data) {
+    public ExplorerAdapter(Context context, ArrayList<Varargs> data) {
         this.context = context;
         this.data = data;
     }

@@ -5,18 +5,15 @@ import android.accessibilityservice.AccessibilityServiceInfo;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.Gravity;
-import android.view.KeyEvent;
+import android.content.res.AssetManager;
+import android.content.ClipboardManager;
+import android.content.SharedPreferences;
+import android.content.Intent;
 import android.widget.Toast;
 import android.os.Bundle;
 import android.os.Build;
-import android.content.ClipboardManager;
-import android.content.ClipData;
-import android.content.Intent;
-import android.content.SharedPreferences;
-import android.content.res.AssetManager;
-import android.preference.PreferenceManager;
-import android.animation.Keyframe;
-import android.text.Selection;
+import android.os.Looper;
+import android.os.Handler;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.HashSet;
@@ -24,16 +21,18 @@ import java.util.Set;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import org.luaj.vm2.Globals;
-import org.luaj.vm2.LuaValue;
+import java.util.TimerTask;
+import java.util.Timer;
+import org.luaj.vm2.lib.jse.JsePlatform;
+import org.luaj.vm2.lib.ZeroArgFunction;
 import org.luaj.vm2.lib.OneArgFunction;
 import org.luaj.vm2.lib.TwoArgFunction;
 import org.luaj.vm2.lib.ThreeArgFunction;
 import org.luaj.vm2.lib.VarArgFunction;
-import org.luaj.vm2.lib.jse.JsePlatform;
+import org.luaj.vm2.Globals;
 import org.luaj.vm2.Varargs;
-import org.luaj.vm2.lib.ZeroArgFunction;
 import org.luaj.vm2.LuaTable;
+import org.luaj.vm2.LuaValue;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
@@ -44,6 +43,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 
+import com.dm.inline.activities.ExplorerActivity;
+import com.dm.inline.platform.*;
+
 public class InlineService extends AccessibilityService {
 
     private static InlineService sharedInstance;
@@ -52,10 +54,10 @@ public class InlineService extends AccessibilityService {
     public Bundle arg;
 
     public Globals env;
-    public SharedPreferences db;
+    public SharedPreferences preference;
 
-    Set<String> defaultPath = new HashSet<String>();
-    public HashMap<LuaValue, LuaValue> watchers;
+    public HashSet<String> defaultPath = new HashSet<String>();
+    public HashMap<LuaValue, LuaValue> watchers = new HashMap<LuaValue, LuaValue>();
 
     @Override
     protected void onServiceConnected() {
@@ -70,14 +72,14 @@ public class InlineService extends AccessibilityService {
 		info.feedbackType = AccessibilityServiceInfo.FEEDBACK_ALL_MASK;
 		setServiceInfo(info);
 
-        sharedInstance = this;
-
-        clipboard = (ClipboardManager) getApplicationContext().getSystemService(CLIPBOARD_SERVICE);
-        db = getSharedPreferences("db", MODE_PRIVATE);
-
         defaultPath.add("/assets/modules/");
         defaultPath.add("/sdcard/inline/");
         defaultPath.add("/sdcard/.inline/");
+
+        sharedInstance = this;
+
+        clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        preference = getSharedPreferences("db", MODE_PRIVATE);
 
         env = JsePlatform.standardGlobals();
 
@@ -85,45 +87,14 @@ public class InlineService extends AccessibilityService {
 
         LuaTable inline = new LuaTable();
         inline.set("toast", new toast());
+        inline.set("timer", new InlineTimer());
+        inline.set("context", new InlineContext());
         inline.set("loadmodules", loader);
 
-        LuaTable mwatchers = new LuaTable();
-        mwatchers.set(LuaValue.INDEX, new getWatcher());
-        mwatchers.set(LuaValue.NEWINDEX, new putWatcher());
-        mwatchers.set(LuaValue.LEN, new sizeWatcher());
-
-        inline.set("watchers", (new LuaTable()).setmetatable(mwatchers));
-
-        LuaTable mdb = new LuaTable();
-        mdb.set(LuaValue.INDEX, new getStringDefault());
-        mdb.set(LuaValue.NEWINDEX, new putKey());
-
-        LuaTable db = new LuaTable();
-        db.set("contains", new contains());
-        db.set("getstring", new getString());
-        db.set("getint", new getInt());
-        db.set("getfloat", new getFloat());
-        db.set("getlong", new getLong());
-        db.set("getboolean", new getBoolean());
-        db.set("getstringset", new getStringSet());
-
-        inline.set("db", db.setmetatable(mdb));
-
-        LuaTable clipboard = new LuaTable();
-        clipboard.set("sethtml", new setHtml());
-        clipboard.set("set", new setClip());
-        clipboard.set("get", new getClip());
-        clipboard.set("has", new hasClip());
-        clipboard.set("clear", new clearClip());
-
-        inline.set("clipboard", clipboard);
-
-        LuaTable format = new LuaTable();
-        format.set("fromclipboard", new FromClipboardFlag());
-        format.set("fromhtml", new fromHtml());
-
-        inline.set("fmt", format);
-        inline.set("context", new InlineContext());
+        inline.set("watchers", new Watchers(watchers));
+        inline.set("db", new DB(preference));
+        inline.set("clipboard", new Clipboard(this, clipboard));
+        inline.set("fmt", new Format(clipboard));
 
         env.set("inline", inline);
         env.set("cake", LuaValue.FALSE);
@@ -134,19 +105,17 @@ public class InlineService extends AccessibilityService {
 	public void onAccessibilityEvent(AccessibilityEvent event) {
         AccessibilityNodeInfo node = event.getSource();
 
-        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
-            (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true)) {
+        for (LuaValue watcher : watchers.values()) {
+            try {
+                watcher.call(new InlineContext(node));
+            } catch (Exception e) {
+                logError(e);
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= 26 ? !node.isShowingHintText() : true) {
 
             String text = node.getText() == null ? "" : node.getText().toString();
-
-            for (LuaValue watcher : watchers.values()) {
-                try {
-                    watcher.call(new InlineContext(node));
-                } catch (Exception e) {
-                    logError(e);
-                }
-            }
-
             Matcher m = Pattern.compile("\\{.+\\}\\$", Pattern.DOTALL).matcher(text);
 
             expressions:
@@ -217,7 +186,7 @@ public class InlineService extends AccessibilityService {
     }
 
     public void logError(Exception e) {
-        Toast toast = Toast.makeText(getApplicationContext(), e.toString(), 1);
+        Toast toast = Toast.makeText(this, e.toString(), 1);
         toast.setGravity(Gravity.CENTER, 0, 0);
         toast.show();
 
@@ -227,29 +196,39 @@ public class InlineService extends AccessibilityService {
     public class InlineContext extends LuaTable {
         public AccessibilityNodeInfo node;
 
+        LuaValue settext = new setText();
+        LuaValue gettext = new getText();
+        LuaValue setselection = new setSelection();
+        LuaValue getselection = new getSelection();
+        LuaValue cut = new cut();
+        LuaValue copy = new copy();
+        LuaValue paste = new paste();
+        LuaValue isfocused = new isFocused();
+        LuaValue ismultiline = new isMultiLine();
+        LuaValue isshowinghinttext = new isShowingHintText();
+        LuaValue refresh = new refresh();
+        LuaValue getpackage = new getPackage();
+
         public InlineContext(AccessibilityNodeInfo node) {
             this();
-
             this.node = node;
-            set("text", node.getText() == null ? "" : node.getText().toString());
-
-            LuaTable selection = new LuaTable();
-            selection.set("start", node.getTextSelectionStart());
-            selection.set("end", node.getTextSelectionEnd());
-            set("selection", selection);
         }
 
         public InlineContext() {
-            set("settext", new setText());
-            set("gettext", new getText());
-            set("setselection", new setSelection());
-            set("getselection", new getSelection());
-            set("cut", new cut());
-            set("copy", new copy());
-            set("paste", new paste());
-            set("ismultiline", new isMultiLine());
-            set("getpackage", new getPackage());
+            set("settext", settext);
+            set("gettext", gettext);
+            set("setselection", setselection);
+            set("getselection", getselection);
+            set("cut", cut);
+            set("copy", copy);
+            set("paste", paste);
+            set("isfocused", isfocused);
+            set("ismultiline", ismultiline);
+            set("isshowinghinttext", isshowinghinttext);
+            set("refresh", refresh);
+            set("getpackage", getpackage);
         }
+
 
         public class setText extends TwoArgFunction {
             public LuaValue call(LuaValue self, LuaValue text) {
@@ -312,9 +291,80 @@ public class InlineService extends AccessibilityService {
             }
         }
 
+        public class isShowingHintText extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                return valueOf(Build.VERSION.SDK_INT >= 26 ? ((InlineContext)self).node.isShowingHintText() : false);
+            }
+        }
+
+        public class isFocused extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                return valueOf(((InlineContext)self).node.isFocused());
+            }
+        }
+
+        public class refresh extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                ((InlineContext)self).node.refresh();
+                return NIL;
+            }
+        }
+
         public class getPackage extends OneArgFunction {
             public LuaValue call(LuaValue self) {
                 return valueOf(((InlineContext)self).node.getPackageName().toString());
+            }
+        }
+    }
+
+    public class InlineTimer extends LuaTable {
+        public Timer timer;
+
+        LuaValue schedule = new schedule();
+        LuaValue cancel = new cancel();
+
+        public InlineTimer() {
+            this.timer = new Timer();
+
+            set("schedule", schedule);
+            set("cancel", cancel);
+
+            LuaTable m = new LuaTable();
+            m.set(CALL, new call());
+            this.setmetatable(m);
+        }
+
+        public class call extends ZeroArgFunction {
+            public LuaValue call() {
+                return (LuaValue) new InlineTimer();
+            }
+        }
+
+        public class cancel extends OneArgFunction {
+            public LuaValue call(LuaValue self) {
+                ((InlineTimer)self).timer.cancel();
+                return NIL;
+            }
+        }
+
+        public class schedule extends VarArgFunction {
+            public Varargs invoke(final Varargs v) {
+                TimerTask task = new TimerTask() {
+                    public void run() {
+                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    v.arg(2).call();
+                                }});
+                    }
+                };
+
+                if (v.arg(4).isnil())
+                    ((InlineTimer)v.arg1()).timer.schedule(task, v.arg(3).toint());
+                else
+                    ((InlineTimer)v.arg1()).timer.scheduleAtFixedRate(task, v.arg(3).toint(), v.arg(4).toint());
+
+                return NIL;
             }
         }
     }
@@ -327,33 +377,26 @@ public class InlineService extends AccessibilityService {
     }
 
     public class loadModules extends ZeroArgFunction {
-        public void loadFile(String path, File file) {
-            try {
-                BufferedReader reader = new BufferedReader(new FileReader(file));
+        public void loadFile(String path, File file) throws IOException {
+            BufferedReader reader = new BufferedReader(new FileReader(file));
 
-                reader.mark(1);
-                int ch = reader.read();
-                if (ch != 65279)
-                    reader.reset();
+            reader.mark(1);
+            int ch = reader.read();
+            if (ch != 65279)
+                reader.reset();
 
-                String rpath;
-                prepare(env.load(reader, rpath = path + file.getName()).call(), rpath);
-            } catch (Exception e) {
-                logError(e);
-            }
+            String rpath;
+            prepare(env.load(reader, rpath = path + file.getName()).call(), rpath);
+
         }
 
-        public void loadAsset(String path, AssetManager assets) {
-            try {
-                InputStream stream = assets.open(path);
-                byte[] buffer = new byte[stream.available()];
-                stream.read(buffer);
+        public void loadAsset(String path, AssetManager assets) throws IOException {
+            InputStream stream = assets.open(path);
+            byte[] buffer = new byte[stream.available()];
+            stream.read(buffer);
 
-                String rpath;
-                prepare(env.load(new String(buffer), rpath = "/assets/" + path).call(), rpath);
-            } catch (Exception e) {
-                logError(e);
-            }
+            String rpath;
+            prepare(env.load(new String(buffer), rpath = "/assets/" + path).call(), rpath);
         }
 
         public void prepare(LuaValue value, String path) {
@@ -362,28 +405,21 @@ public class InlineService extends AccessibilityService {
         }
 
         public LuaValue call() {
-            watchers = new HashMap<LuaValue, LuaValue>();
+            watchers.clear();
 
-            for (String path : db.getStringSet("path", defaultPath))
-                if (path.startsWith("/assets/")) {
-                    AssetManager assets = getResources().getAssets();
-                    String assetPath = path.substring(8);
+            try {
+                for (String path : preference.getStringSet("path", defaultPath))
+                    if (path.startsWith("/assets/")) {
+                        AssetManager assets = getResources().getAssets();
+                        String assetPath = path.substring(8);
+                        String[] files = assets.list(assetPath.substring(0, assetPath.length() - 1));
 
-                    String[] files = {};
-
-                    try {
-                        files = assets.list(assetPath.substring(0, assetPath.length() - 1));
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-
-                    if (files.length > 0)
-                        for (String file : files)
-                            loadAsset(assetPath + file, assets);
-                    else
-                        loadAsset(assetPath, assets);
-                } else {
-                    try {
+                        if (files.length > 0)
+                            for (String file : files)
+                                loadAsset(assetPath + file, assets);
+                        else
+                            loadAsset(assetPath, assets);
+                    } else {
                         File module = new File(path);
 
                         if (module.isDirectory()) {
@@ -393,203 +429,12 @@ public class InlineService extends AccessibilityService {
                         } else if (module.isFile()) {
                             loadFile(path, module);
                         }
-                    } catch (Exception e) {
-                        e.printStackTrace();
                     }
-                }
+            } catch (Exception e) {
+                logError(e);
+            }
+
             return TRUE;
-        }
-    }
-
-    // Watchers
-
-    public class getWatcher extends TwoArgFunction {
-        public LuaValue call(LuaValue table, LuaValue name) {
-            return watchers.containsKey(name) ? watchers.get(name) : NIL;
-        }
-    }
-
-    public class sizeWatcher extends ZeroArgFunction {
-        public LuaValue call() {
-            return valueOf(watchers.size());
-        }
-    }
-
-    public class putWatcher extends ThreeArgFunction {
-        public LuaValue call(LuaValue table, LuaValue name, LuaValue watcher) {
-            if (watcher.isnil()) {
-                if (watchers.containsKey(name))
-                    watchers.remove(name);
-            } else {
-                watchers.put(name, watcher);
-            }
-
-            return NIL;
-        }
-    }
-
-    // Clipboard
-
-    public class setHtml extends TwoArgFunction {
-        public LuaValue call(LuaValue text, LuaValue html) {
-            clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.tojstring(), html.tojstring()));
-            return NIL;
-        }
-    }
-
-    public class setClip extends OneArgFunction {
-        public LuaValue call(LuaValue text) {
-            clipboard.setPrimaryClip(ClipData.newPlainText(null, text.tojstring()));
-            return NIL;
-        }
-    }
-
-    public class getClip extends ZeroArgFunction {
-        public LuaValue call() {
-            ClipData clip = clipboard.getPrimaryClip();
-            return valueOf(clip.getItemAt(0).coerceToHtmlText(getApplicationContext()));
-        }
-    }
-
-    public class hasClip extends ZeroArgFunction {
-        public LuaValue call() {
-            return valueOf(clipboard.hasPrimaryClip());
-        }
-    }
-
-    public class clearClip extends ZeroArgFunction {
-        public LuaValue call() {
-            clipboard.clearPrimaryClip();
-            return NIL;
-        }
-    }
-
-    // Format
-
-    public class fromHtml extends OneArgFunction {
-        public LuaValue call(LuaValue html) {
-            clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.tojstring()));
-            return new FromClipboardFlag();
-        }
-    }
-
-    public class FromClipboardFlag extends LuaValue {
-        public int type() {
-            return 10;
-        }
-
-        public String typename() {
-            return "formatflag";
-        }
-    }
-
-    // DB
-
-    public class getStringDefault extends TwoArgFunction {
-        public LuaValue call(LuaValue table, LuaValue key) {
-            return valueOf(db.getString(key.tojstring(), ""));
-        }
-    }
-
-    public class getString extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            return valueOf(db.getString(key.tojstring(), defaultVal.isstring() ? defaultVal.tojstring() : ""));
-        }
-    }
-
-    public class getStringSet extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            Set<String> items = new HashSet<String>();
-
-            if (defaultVal.istable()) {
-                LuaValue k = NIL;
-                while (true) {
-                    Varargs n = defaultVal.next(k);
-                    if ((k = n.arg1()).isnil() || !k.isint())
-                        break;
-                    LuaValue v = n.arg(2);
-
-                    items.add(v.tojstring());
-                }
-            }
-
-            LuaTable table = new LuaTable();
-            Set<String> set = db.getStringSet(key.tojstring(), items);
-
-            int index = 1;
-            for (String item : set) {
-                table.set(index++, valueOf(item));
-            }
-
-            return table;
-        }
-    }
-
-    public class getInt extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            return valueOf(db.getInt(key.tojstring(), defaultVal.isnumber() ? defaultVal.toint() : 0));
-        }
-    }
-
-    public class getFloat extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            return valueOf(db.getFloat(key.tojstring(), defaultVal.isnumber() ? defaultVal.tofloat() : 0));
-        }
-    }
-
-    public class getLong extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            return valueOf(db.getLong(key.tojstring(), defaultVal.isnumber() ? defaultVal.tolong() : 0));
-        }
-    }
-
-    public class getBoolean extends TwoArgFunction {
-        public LuaValue call(LuaValue key, LuaValue defaultVal) {
-            return valueOf(db.getBoolean(key.tojstring(), defaultVal.toboolean()));
-        }
-    }
-
-    public class contains extends OneArgFunction {
-        public LuaValue call(LuaValue key) {
-            return valueOf(db.contains(key.tojstring()));
-        }
-    }
-
-    public class putKey extends ThreeArgFunction {
-        public LuaValue call(LuaValue table, LuaValue key, LuaValue value) {
-            if (key.isstring())
-                if (value.isnil())
-                    db.edit().remove(key.tojstring()).apply();
-                else
-                if (value.isnumber()) {
-                    if (value.isint())
-                        db.edit().putInt(key.tojstring(), value.toint()).apply();
-                    if (value.islong())
-                        db.edit().putLong(key.tojstring(), value.tolong()).apply();
-                    else
-                        db.edit().putFloat(key.tojstring(), value.tofloat()).apply();
-
-                } else if (value.istable()) {
-                    Set<String> items = new HashSet<String>();
-
-                    LuaValue k = NIL;
-                    while (true) {
-                        Varargs n = value.next(k);
-                        if ((k = n.arg1()).isnil() || !k.isint())
-                            break;
-                        LuaValue v = n.arg(2);
-
-                        items.add(v.tojstring());
-                    }
-
-                    db.edit().putStringSet(key.tojstring(), items).apply();
-
-                } else if (value.isboolean())
-                    db.edit().putBoolean(key.tojstring(), value.toboolean()).apply();
-                else
-                    db.edit().putString(key.tojstring(), value.tojstring()).apply();
-
-            return NIL;
         }
     }
 }

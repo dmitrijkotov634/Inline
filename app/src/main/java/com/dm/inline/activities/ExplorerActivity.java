@@ -19,7 +19,7 @@ public class ExplorerActivity extends Activity {
 
     public InlineService service;
     public ListView explorer;
-    public ExploreAdapter adapter;
+    public ExplorerAdapter adapter;
 
     public int lastPos = 0;
 
@@ -93,7 +93,7 @@ public class ExplorerActivity extends Activity {
             data.add(n);
         }
 
-        adapter = new ExploreAdapter(getApplicationContext(), data);
+        adapter = new ExplorerAdapter(this, data);
         explorer.setAdapter(adapter);
     }
 }
