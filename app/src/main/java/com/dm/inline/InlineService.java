@@ -9,6 +9,7 @@ import android.content.res.AssetManager;
 import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.content.Intent;
+import android.content.ClipData;
 import android.widget.Toast;
 import android.os.Bundle;
 import android.os.Build;
@@ -43,9 +44,6 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 
-import com.dm.inline.activities.ExplorerActivity;
-import com.dm.inline.platform.*;
-
 public class InlineService extends AccessibilityService {
 
     private static InlineService sharedInstance;
@@ -54,7 +52,7 @@ public class InlineService extends AccessibilityService {
     public Bundle arg;
 
     public Globals env;
-    public SharedPreferences preference;
+    public SharedPreferences db;
 
     public HashSet<String> defaultPath = new HashSet<String>();
     public HashMap<LuaValue, LuaValue> watchers = new HashMap<LuaValue, LuaValue>();
@@ -79,7 +77,7 @@ public class InlineService extends AccessibilityService {
         sharedInstance = this;
 
         clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        preference = getSharedPreferences("db", MODE_PRIVATE);
+        db = getSharedPreferences("db", MODE_PRIVATE);
 
         env = JsePlatform.standardGlobals();
 
@@ -91,10 +89,10 @@ public class InlineService extends AccessibilityService {
         inline.set("context", new InlineContext());
         inline.set("loadmodules", loader);
 
-        inline.set("watchers", new Watchers(watchers));
-        inline.set("db", new DB(preference));
-        inline.set("clipboard", new Clipboard(this, clipboard));
-        inline.set("fmt", new Format(clipboard));
+        inline.set("watchers", new WatchersTable());
+        inline.set("clipboard", new ClipboardTable());
+        inline.set("db", new DBTable());
+        inline.set("fmt", new FormatTable());
 
         env.set("inline", inline);
         env.set("cake", LuaValue.FALSE);
@@ -408,7 +406,7 @@ public class InlineService extends AccessibilityService {
             watchers.clear();
 
             try {
-                for (String path : preference.getStringSet("path", defaultPath))
+                for (String path : db.getStringSet("path", defaultPath))
                     if (path.startsWith("/assets/")) {
                         AssetManager assets = getResources().getAssets();
                         String assetPath = path.substring(8);
@@ -433,8 +431,239 @@ public class InlineService extends AccessibilityService {
             } catch (Exception e) {
                 logError(e);
             }
-
             return TRUE;
+        }
+    }
+
+    public class WatchersTable extends LuaTable {
+        public WatchersTable() {
+            LuaTable m = new LuaTable();
+            m.set(INDEX, new get());
+            m.set(NEWINDEX, new set());
+            m.set(LEN, new len());
+
+            this.setmetatable(m);
+        }
+
+        public class get extends TwoArgFunction {
+            public LuaValue call(LuaValue table, LuaValue name) {
+                return watchers.containsKey(name) ? watchers.get(name) : NIL;
+            }
+        }
+
+        public class len extends ZeroArgFunction {
+            public LuaValue call() {
+                return valueOf(watchers.size());
+            }
+        }
+
+        public class set extends ThreeArgFunction {
+            public LuaValue call(LuaValue table, LuaValue name, LuaValue function) {
+                if (function.isnil()) {
+                    if (watchers.containsKey(name))
+                        watchers.remove(name);
+                } else {
+                    watchers.put(name, function);
+                }
+
+                return NIL;
+            }
+        }
+    }
+
+    public class ClipboardTable extends LuaTable {
+        public ClipboardTable() {
+            set("sethtml", new setHtml());
+            set("set", new setClip());
+            set("get", new getClip());
+            set("has", new hasClip());
+            set("clear", new clearClip());
+        }
+
+        public class setHtml extends TwoArgFunction {
+            public LuaValue call(LuaValue text, LuaValue html) {
+                clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.tojstring(), html.tojstring()));
+                return NIL;
+            }
+        }
+
+        public class setClip extends OneArgFunction {
+            public LuaValue call(LuaValue text) {
+                clipboard.setPrimaryClip(ClipData.newPlainText(null, text.tojstring()));
+                return NIL;
+            }
+        }
+
+        public class getClip extends ZeroArgFunction {
+            public LuaValue call() {
+                ClipData clip = clipboard.getPrimaryClip();
+                return valueOf(clip.getItemAt(0).coerceToHtmlText(getApplicationContext()));
+            }
+        }
+
+        public class hasClip extends ZeroArgFunction {
+            public LuaValue call() {
+                return valueOf(clipboard.hasPrimaryClip());
+            }
+        }
+
+        public class clearClip extends ZeroArgFunction {
+            public LuaValue call() {
+                clipboard.clearPrimaryClip();
+                return NIL;
+            }
+        }
+    }
+
+    public class FormatTable extends LuaTable {
+        public FormatTable() {
+            set("fromhtml", new fromHtml());
+            set("fromclipboard", new FromClipboardFlag());
+        }
+
+        public class fromHtml extends OneArgFunction {
+            public LuaValue call(LuaValue html) {
+                clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.tojstring()));
+                return new FromClipboardFlag();
+            }
+        }
+
+        public class FromClipboardFlag extends LuaValue {
+            public int type() {
+                return 10;
+            }
+
+            public String typename() {
+                return "formatflag";
+            }
+        }
+    }
+
+    public class DBTable extends LuaTable {
+        public DBTable() {
+            LuaValue put = new putKey();
+            set("put", put);
+            set("contains", new contains());
+            set("getstring", new getString());
+            set("getint", new getInt());
+            set("getfloat", new getFloat());
+            set("getlong", new getLong());
+            set("getboolean", new getBoolean());
+            set("getstringset", new getStringSet());
+
+            LuaTable m = new LuaTable();
+            m.set(LuaValue.INDEX, new getStringDefault());
+            m.set(LuaValue.NEWINDEX, put);
+
+            this.setmetatable(m);
+        }
+
+        public class getStringDefault extends TwoArgFunction {
+            public LuaValue call(LuaValue table, LuaValue key) {
+                return valueOf(db.getString(key.tojstring(), ""));
+            }
+        }
+
+        public class getString extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                return valueOf(db.getString(key.tojstring(), defaultVal.isstring() ? defaultVal.tojstring() : ""));
+            }
+        }
+
+        public class getStringSet extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                HashSet<String> items = new HashSet<String>();
+
+                if (defaultVal.istable()) {
+                    LuaValue k = NIL;
+                    while (true) {
+                        Varargs n = defaultVal.next(k);
+                        if ((k = n.arg1()).isnil() || !k.isint())
+                            break;
+                        LuaValue v = n.arg(2);
+
+                        items.add(v.tojstring());
+                    }
+                }
+
+                LuaTable table = new LuaTable();
+                Set<String> set = db.getStringSet(key.tojstring(), items);
+
+                int index = 1;
+                for (String item : set) {
+                    table.set(index++, valueOf(item));
+                }
+
+                return table;
+            }
+        }
+
+        public class getInt extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                return valueOf(db.getInt(key.tojstring(), defaultVal.isnumber() ? defaultVal.toint() : 0));
+            }
+        }
+
+        public class getFloat extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                return valueOf(db.getFloat(key.tojstring(), defaultVal.isnumber() ? defaultVal.tofloat() : 0));
+            }
+        }
+
+        public class getLong extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                return valueOf(db.getLong(key.tojstring(), defaultVal.isnumber() ? defaultVal.tolong() : 0));
+            }
+        }
+
+        public class getBoolean extends TwoArgFunction {
+            public LuaValue call(LuaValue key, LuaValue defaultVal) {
+                return valueOf(db.getBoolean(key.tojstring(), defaultVal.toboolean()));
+            }
+        }
+
+        public class contains extends OneArgFunction {
+            public LuaValue call(LuaValue key) {
+                return valueOf(db.contains(key.tojstring()));
+            }
+        }
+
+        public class putKey extends ThreeArgFunction {
+            public LuaValue call(LuaValue table, LuaValue key, LuaValue value) {
+                if (key.isstring())
+                    if (value.isnil())
+                        db.edit().remove(key.tojstring()).apply();
+                    else
+                    if (value.isnumber()) {
+                        if (value.isint())
+                            db.edit().putInt(key.tojstring(), value.toint()).apply();
+                        if (value.islong())
+                            db.edit().putLong(key.tojstring(), value.tolong()).apply();
+                        else
+                            db.edit().putFloat(key.tojstring(), value.tofloat()).apply();
+
+                    } else if (value.istable()) {
+                        HashSet<String> items = new HashSet<String>();
+
+                        LuaValue k = NIL;
+                        while (true) {
+                            Varargs n = value.next(k);
+                            if ((k = n.arg1()).isnil() || !k.isint())
+                                break;
+                            LuaValue v = n.arg(2);
+
+                            items.add(v.tojstring());
+                        }
+
+                        db.edit().putStringSet(key.tojstring(), items).apply();
+
+                    } else if (value.isboolean())
+                        db.edit().putBoolean(key.tojstring(), value.toboolean()).apply();
+                    else
+                        db.edit().putString(key.tojstring(), value.tojstring()).apply();
+
+                return NIL;
+            }
         }
     }
 }
