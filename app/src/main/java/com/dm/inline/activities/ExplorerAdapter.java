@@ -1,16 +1,15 @@
 package com.dm.inline.activities;
 
+import android.content.Context;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.TextView;
-import android.view.LayoutInflater;
-import android.view.ViewGroup;
-import android.view.View;
-import android.content.Context;
-import org.luaj.vm2.Varargs;
-import org.luaj.vm2.LuaValue;
-import java.util.ArrayList;
-import java.util.HashMap;
 import com.dm.inline.R;
+import java.util.ArrayList;
+import org.luaj.vm2.LuaValue;
+import org.luaj.vm2.Varargs;
 
 public class ExplorerAdapter extends BaseAdapter {
     private Context context;

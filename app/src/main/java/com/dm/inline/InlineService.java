@@ -2,47 +2,41 @@ package com.dm.inline;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.res.AssetManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
-import android.view.Gravity;
-import android.content.res.AssetManager;
-import android.content.ClipboardManager;
-import android.content.SharedPreferences;
-import android.content.Intent;
-import android.content.ClipData;
 import android.widget.Toast;
-import android.os.Bundle;
-import android.os.Build;
-import android.os.Looper;
-import android.os.Handler;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.TimerTask;
-import java.util.Timer;
-import org.luaj.vm2.lib.jse.JsePlatform;
-import org.luaj.vm2.lib.ZeroArgFunction;
-import org.luaj.vm2.lib.OneArgFunction;
-import org.luaj.vm2.lib.TwoArgFunction;
-import org.luaj.vm2.lib.ThreeArgFunction;
-import org.luaj.vm2.lib.VarArgFunction;
-import org.luaj.vm2.Globals;
-import org.luaj.vm2.Varargs;
-import org.luaj.vm2.LuaTable;
-import org.luaj.vm2.LuaValue;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileReader;
-import java.io.FileNotFoundException;
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.Reader;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.luaj.vm2.Globals;
+import org.luaj.vm2.LuaTable;
+import org.luaj.vm2.LuaValue;
+import org.luaj.vm2.Varargs;
+import org.luaj.vm2.lib.OneArgFunction;
+import org.luaj.vm2.lib.ThreeArgFunction;
+import org.luaj.vm2.lib.TwoArgFunction;
+import org.luaj.vm2.lib.VarArgFunction;
+import org.luaj.vm2.lib.ZeroArgFunction;
+import org.luaj.vm2.lib.jse.JsePlatform;
 
 public class InlineService extends AccessibilityService {
 
@@ -73,7 +67,7 @@ public class InlineService extends AccessibilityService {
         defaultPath.add("/assets/modules/");
         defaultPath.add("/sdcard/inline/");
         defaultPath.add("/sdcard/.inline/");
-
+        
         sharedInstance = this;
 
         clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -231,7 +225,7 @@ public class InlineService extends AccessibilityService {
         public class setText extends TwoArgFunction {
             public LuaValue call(LuaValue self, LuaValue text) {
                 Bundle args = new Bundle();
-                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text.isnil() ? "" : text.tojstring());
+                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text.isnil() ? "" : text.checkjstring());
                 ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
 
                 return NIL;
@@ -248,8 +242,8 @@ public class InlineService extends AccessibilityService {
         public class setSelection extends ThreeArgFunction {
             public LuaValue call(LuaValue self, LuaValue start, LuaValue end) {
                 Bundle args = new Bundle();
-                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start.toint() - 1);
-                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end.isnil() ? start.toint() - 1 : end.toint() - 1);
+                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start.checkint() - 1);
+                args.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end.isnil() ? start.checkint() - 1 : end.checkint() - 1);
                 ((InlineContext)self).node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args);
                 return NIL;
             }
@@ -352,15 +346,16 @@ public class InlineService extends AccessibilityService {
                         new Handler(Looper.getMainLooper()).post(new Runnable() {
                                 @Override
                                 public void run() {
-                                    v.arg(2).call();
+                                    if (v.arg(2).call().toboolean())
+                                        cancel();
                                 }});
                     }
                 };
 
                 if (v.arg(4).isnil())
-                    ((InlineTimer)v.arg1()).timer.schedule(task, v.arg(3).toint());
+                    ((InlineTimer)v.arg1()).timer.schedule(task, v.arg(3).checkint());
                 else
-                    ((InlineTimer)v.arg1()).timer.scheduleAtFixedRate(task, v.arg(3).toint(), v.arg(4).toint());
+                    ((InlineTimer)v.arg1()).timer.scheduleAtFixedRate(task, v.arg(3).checkint(), v.arg(4).checkint());
 
                 return NIL;
             }
@@ -383,8 +378,8 @@ public class InlineService extends AccessibilityService {
             if (ch != 65279)
                 reader.reset();
 
-            String rpath;
-            prepare(env.load(reader, rpath = path + file.getName()).call(), rpath);
+            String p;
+            prepare(env.load(reader, p = path + file.getName()).call(), p);
 
         }
 
@@ -393,8 +388,8 @@ public class InlineService extends AccessibilityService {
             byte[] buffer = new byte[stream.available()];
             stream.read(buffer);
 
-            String rpath;
-            prepare(env.load(new String(buffer), rpath = "/assets/" + path).call(), rpath);
+            String p;
+            prepare(env.load(new String(buffer), p = "/assets/" + path).call(), p);
         }
 
         public void prepare(LuaValue value, String path) {
@@ -482,14 +477,14 @@ public class InlineService extends AccessibilityService {
 
         public class setHtml extends TwoArgFunction {
             public LuaValue call(LuaValue text, LuaValue html) {
-                clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.tojstring(), html.tojstring()));
+                clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.checkjstring(), html.checkjstring()));
                 return NIL;
             }
         }
 
         public class setClip extends OneArgFunction {
             public LuaValue call(LuaValue text) {
-                clipboard.setPrimaryClip(ClipData.newPlainText(null, text.tojstring()));
+                clipboard.setPrimaryClip(ClipData.newPlainText(null, text.checkjstring()));
                 return NIL;
             }
         }
@@ -523,7 +518,7 @@ public class InlineService extends AccessibilityService {
 
         public class fromHtml extends OneArgFunction {
             public LuaValue call(LuaValue html) {
-                clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.tojstring()));
+                clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.checkjstring()));
                 return new FromClipboardFlag();
             }
         }
@@ -560,13 +555,13 @@ public class InlineService extends AccessibilityService {
 
         public class getStringDefault extends TwoArgFunction {
             public LuaValue call(LuaValue table, LuaValue key) {
-                return valueOf(db.getString(key.tojstring(), ""));
+                return valueOf(db.getString(key.checkjstring(), ""));
             }
         }
 
         public class getString extends TwoArgFunction {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getString(key.tojstring(), defaultVal.isstring() ? defaultVal.tojstring() : ""));
+                return valueOf(db.getString(key.checkjstring(), defaultVal.isnil() ? "" : defaultVal.checkjstring()));
             }
         }
 
@@ -574,7 +569,7 @@ public class InlineService extends AccessibilityService {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
                 HashSet<String> items = new HashSet<String>();
 
-                if (defaultVal.istable()) {
+                if (!defaultVal.isnil() && defaultVal.checktable() != null) {
                     LuaValue k = NIL;
                     while (true) {
                         Varargs n = defaultVal.next(k);
@@ -587,7 +582,7 @@ public class InlineService extends AccessibilityService {
                 }
 
                 LuaTable table = new LuaTable();
-                Set<String> set = db.getStringSet(key.tojstring(), items);
+                Set<String> set = db.getStringSet(key.checkjstring(), items);
 
                 int index = 1;
                 for (String item : set) {
@@ -600,70 +595,74 @@ public class InlineService extends AccessibilityService {
 
         public class getInt extends TwoArgFunction {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getInt(key.tojstring(), defaultVal.isnumber() ? defaultVal.toint() : 0));
+                return valueOf(db.getInt(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().toint()));
             }
         }
 
         public class getFloat extends TwoArgFunction {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getFloat(key.tojstring(), defaultVal.isnumber() ? defaultVal.tofloat() : 0));
+                return valueOf(db.getFloat(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tofloat()));
             }
         }
 
         public class getLong extends TwoArgFunction {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getLong(key.tojstring(), defaultVal.isnumber() ? defaultVal.tolong() : 0));
+                return valueOf(db.getLong(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tolong()));
             }
         }
 
         public class getBoolean extends TwoArgFunction {
             public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getBoolean(key.tojstring(), defaultVal.toboolean()));
+                return valueOf(db.getBoolean(key.checkjstring(), defaultVal.toboolean()));
             }
         }
 
         public class contains extends OneArgFunction {
             public LuaValue call(LuaValue key) {
-                return valueOf(db.contains(key.tojstring()));
+                return valueOf(db.contains(key.checkjstring()));
             }
         }
 
         public class putKey extends ThreeArgFunction {
             public LuaValue call(LuaValue table, LuaValue key, LuaValue value) {
-                if (key.isstring())
-                    if (value.isnil())
-                        db.edit().remove(key.tojstring()).apply();
-                    else
-                    if (value.isnumber()) {
-                        if (value.isint())
-                            db.edit().putInt(key.tojstring(), value.toint()).apply();
-                        if (value.islong())
-                            db.edit().putLong(key.tojstring(), value.tolong()).apply();
-                        else
-                            db.edit().putFloat(key.tojstring(), value.tofloat()).apply();
+                String k = key.checkjstring();
+                
+                SharedPreferences.Editor editor = db.edit();
+                switch (value.type()) {
+                    case TNIL:
+                        editor.remove(k).apply();
+                        break;
 
-                    } else if (value.istable()) {
+                    case TNUMBER:
+                        editor.putFloat(k, value.tofloat());
+                        break;
+                    case TBOOLEAN:
+                        editor.putBoolean(k, value.toboolean());
+                        break;
+                    case TTABLE:
                         HashSet<String> items = new HashSet<String>();
 
-                        LuaValue k = NIL;
+                        LuaValue q = NIL;
                         while (true) {
-                            Varargs n = value.next(k);
-                            if ((k = n.arg1()).isnil() || !k.isint())
+                            Varargs n = value.next(q);
+                            if ((q = n.arg1()).isnil() || !q.isint())
                                 break;
                             LuaValue v = n.arg(2);
-
                             items.add(v.tojstring());
                         }
 
-                        db.edit().putStringSet(key.tojstring(), items).apply();
+                        editor.putStringSet(k, items);
+                        break;
 
-                    } else if (value.isboolean())
-                        db.edit().putBoolean(key.tojstring(), value.toboolean()).apply();
-                    else
-                        db.edit().putString(key.tojstring(), value.tojstring()).apply();
-
+                    case TSTRING:
+                    default:
+                        editor.putString(k, value.tojstring());
+                }
+                
+                editor.apply();
                 return NIL;
             }
         }
     }
 }
+        

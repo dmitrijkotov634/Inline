@@ -2,18 +2,14 @@ package com.dm.inline.activities;
 
 import android.app.Activity;
 import android.os.Bundle;
-import android.widget.ListView;
-import android.widget.ArrayAdapter;
-import android.widget.Toast;
-import org.luaj.vm2.Varargs;
-import org.luaj.vm2.LuaValue;
-import org.luaj.vm2.LuaTable;
-import android.widget.AdapterView;
 import android.view.View;
-import android.widget.Adapter;
-import java.util.ArrayList;
-import com.dm.inline.R;
+import android.widget.AdapterView;
+import android.widget.ListView;
 import com.dm.inline.InlineService;
+import com.dm.inline.R;
+import java.util.ArrayList;
+import org.luaj.vm2.LuaValue;
+import org.luaj.vm2.Varargs;
 
 public class ExplorerActivity extends Activity {
 
