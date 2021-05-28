@@ -37,8 +37,11 @@ import org.luaj.vm2.lib.TwoArgFunction;
 import org.luaj.vm2.lib.VarArgFunction;
 import org.luaj.vm2.lib.ZeroArgFunction;
 import org.luaj.vm2.lib.jse.JsePlatform;
+import java.util.ArrayList;
+import android.transition.PathMotion;
 
 public class InlineService extends AccessibilityService {
+    static final String PATH = "/assets/modules/;/sdcard/inline/;/sdcard/.inline/";
 
     private static InlineService sharedInstance;
 
@@ -46,9 +49,8 @@ public class InlineService extends AccessibilityService {
     public Bundle arg;
 
     public Globals env;
-    public SharedPreferences db;
+    public SharedPreferences prefs;
 
-    public HashSet<String> defaultPath = new HashSet<String>();
     public HashMap<LuaValue, LuaValue> watchers = new HashMap<LuaValue, LuaValue>();
 
     @Override
@@ -64,14 +66,10 @@ public class InlineService extends AccessibilityService {
 		info.feedbackType = AccessibilityServiceInfo.FEEDBACK_ALL_MASK;
 		setServiceInfo(info);
 
-        defaultPath.add("/assets/modules/");
-        defaultPath.add("/sdcard/inline/");
-        defaultPath.add("/sdcard/.inline/");
-        
         sharedInstance = this;
 
         clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-        db = getSharedPreferences("db", MODE_PRIVATE);
+        prefs = getSharedPreferences("inline", MODE_PRIVATE);
 
         env = JsePlatform.standardGlobals();
 
@@ -81,12 +79,30 @@ public class InlineService extends AccessibilityService {
         inline.set("toast", new toast());
         inline.set("timer", new InlineTimer());
         inline.set("context", new InlineContext());
+        inline.set("prefs", new InlinePrefs(prefs));
         inline.set("loadmodules", loader);
 
-        inline.set("watchers", new WatchersTable());
-        inline.set("clipboard", new ClipboardTable());
-        inline.set("db", new DBTable());
-        inline.set("fmt", new FormatTable());
+        LuaTable watchers = new LuaTable();
+        watchers.set(LuaValue.INDEX, new getWatcher());
+        watchers.set(LuaValue.NEWINDEX, new setWatcher());
+        watchers.set(LuaValue.LEN, new lenWatcher());
+
+        inline.set("watchers", new LuaTable().setmetatable(watchers));
+
+        LuaTable clipboard = new LuaTable();
+        clipboard.set("sethtml", new setHtml());
+        clipboard.set("set", new setClip());
+        clipboard.set("get", new getClip());
+        clipboard.set("has", new hasClip());
+        clipboard.set("clear", new clearClip());
+
+        inline.set("clipboard", clipboard);
+
+        LuaTable fmt = new LuaTable();
+        fmt.set("fromhtml", new fromHtml());
+        fmt.set("fromclipboard", new FromClipboardFlag());
+
+        inline.set("fmt", fmt);
 
         env.set("inline", inline);
         env.set("cake", LuaValue.FALSE);
@@ -97,9 +113,10 @@ public class InlineService extends AccessibilityService {
 	public void onAccessibilityEvent(AccessibilityEvent event) {
         AccessibilityNodeInfo node = event.getSource();
 
+        InlineContext context = new InlineContext(node);
         for (LuaValue watcher : watchers.values()) {
             try {
-                watcher.call(new InlineContext(node));
+                watcher.call(context);
             } catch (Exception e) {
                 logError(e);
             }
@@ -127,7 +144,6 @@ public class InlineService extends AccessibilityService {
                         while (true) {
                             switch (value.type()) {
                                 case LuaValue.TFUNCTION:
-                                    LuaValue context = new InlineContext(node);
                                     value = args.length == 1 ? value.call(context) : value.call(context, LuaValue.valueOf(args[1]));
                                     break;
 
@@ -188,39 +204,25 @@ public class InlineService extends AccessibilityService {
     public class InlineContext extends LuaTable {
         public AccessibilityNodeInfo node;
 
-        LuaValue settext = new setText();
-        LuaValue gettext = new getText();
-        LuaValue setselection = new setSelection();
-        LuaValue getselection = new getSelection();
-        LuaValue cut = new cut();
-        LuaValue copy = new copy();
-        LuaValue paste = new paste();
-        LuaValue isfocused = new isFocused();
-        LuaValue ismultiline = new isMultiLine();
-        LuaValue isshowinghinttext = new isShowingHintText();
-        LuaValue refresh = new refresh();
-        LuaValue getpackage = new getPackage();
-
         public InlineContext(AccessibilityNodeInfo node) {
             this();
             this.node = node;
         }
 
         public InlineContext() {
-            set("settext", settext);
-            set("gettext", gettext);
-            set("setselection", setselection);
-            set("getselection", getselection);
-            set("cut", cut);
-            set("copy", copy);
-            set("paste", paste);
-            set("isfocused", isfocused);
-            set("ismultiline", ismultiline);
-            set("isshowinghinttext", isshowinghinttext);
-            set("refresh", refresh);
-            set("getpackage", getpackage);
+            set("settext", new setText());
+            set("gettext", new getText());
+            set("setselection", new setSelection());
+            set("getselection", new getSelection());
+            set("cut", new cut());
+            set("copy", new copy());
+            set("paste", new paste());
+            set("isfocused", new isFocused());
+            set("ismultiline", new isMultiLine());
+            set("isshowinghinttext", new isShowingHintText());
+            set("refresh", new refresh());
+            set("getpackage", new getPackage());
         }
-
 
         public class setText extends TwoArgFunction {
             public LuaValue call(LuaValue self, LuaValue text) {
@@ -309,17 +311,168 @@ public class InlineService extends AccessibilityService {
         }
     }
 
+    public class InlinePrefs extends LuaTable {
+        public SharedPreferences prefs;
+
+        public InlinePrefs(String name) {
+            this();
+            this.prefs = getSharedPreferences(name, MODE_PRIVATE);
+        }
+
+        public InlinePrefs(SharedPreferences sprefs) {
+            this();
+            this.prefs = sprefs;
+        }
+
+        public InlinePrefs() {
+            set("getstring", new getString());
+            set("getstringset", new getStringSet());
+            set("getint", new getInt());
+            set("getfloat", new getFloat());
+            set("getlong", new getLong());
+            set("getboolean", new getBoolean());
+            set("contains", new contains());
+
+            LuaTable m = new LuaTable();
+            m.set(CALL, new call());
+            m.set(INDEX, new getStringDefault());
+            m.set(NEWINDEX, new putKey());
+
+            this.setmetatable(m);
+        }
+
+        public class call extends TwoArgFunction {
+            public LuaValue call(LuaValue self, LuaValue name) {
+                return (LuaValue) new InlinePrefs(name.checkjstring());
+            }
+        }
+
+        public class getStringDefault extends TwoArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key) {
+                return valueOf(((InlinePrefs)self).prefs.getString(key.checkjstring(), ""));
+            }
+        }
+
+        public class getString extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                return valueOf(((InlinePrefs)self).prefs.getString(key.checkjstring(), defaultVal.isnil() ? "" : defaultVal.checkjstring()));
+            }
+        }
+
+        public class getStringSet extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                HashSet<String> items = new HashSet<String>();
+
+                if (!defaultVal.isnil() && defaultVal.checktable() != null) {
+                    LuaValue k = NIL;
+                    while (true) {
+                        Varargs n = defaultVal.next(k);
+                        if ((k = n.arg1()).isnil() || !k.isint())
+                            break;
+                        LuaValue v = n.arg(2);
+
+                        items.add(v.tojstring());
+                    }
+                }
+
+                LuaTable table = new LuaTable();
+                Set<String> set = ((InlinePrefs)self).prefs.getStringSet(key.checkjstring(), items);
+
+                int index = 1;
+                for (String item : set) {
+                    table.set(index++, valueOf(item));
+                }
+
+                return table;
+            }
+        }
+
+        public class getInt extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                return valueOf(((InlinePrefs)self).prefs.getInt(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().toint()));
+            }
+        }
+
+        public class getFloat extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                return valueOf(((InlinePrefs)self).prefs.getFloat(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tofloat()));
+            }
+        }
+
+        public class getLong extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                return valueOf(((InlinePrefs)self).prefs.getLong(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tolong()));
+            }
+        }
+
+        public class getBoolean extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue defaultVal) {
+                return valueOf(((InlinePrefs)self).prefs.getBoolean(key.checkjstring(), defaultVal.toboolean()));
+            }
+        }
+
+        public class contains extends TwoArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key) {
+                return valueOf(((InlinePrefs)self).prefs.contains(key.checkjstring()));
+            }
+        }
+
+        public class putKey extends ThreeArgFunction {
+            public LuaValue call(LuaValue self, LuaValue key, LuaValue value) {
+                String k = key.checkjstring();
+
+                SharedPreferences.Editor editor = ((InlinePrefs)self).prefs.edit();
+
+                switch (value.type()) {
+                    case TNIL:
+                        editor.remove(k).apply();
+                        break;
+
+                    case TNUMBER:
+                        if (value.isint())
+                            editor.putInt(k, value.toint());
+                        else if (value.islong())
+                            editor.putLong(k, value.tolong());
+                        else
+                            editor.putFloat(k, value.tofloat());
+                        break;
+                    case TBOOLEAN:
+                        editor.putBoolean(k, value.toboolean());
+                        break;
+                    case TTABLE:
+                        HashSet<String> items = new HashSet<String>();
+
+                        LuaValue q = NIL;
+                        while (true) {
+                            Varargs n = value.next(q);
+                            if ((q = n.arg1()).isnil() || !q.isint())
+                                break;
+                            LuaValue v = n.arg(2);
+                            items.add(v.tojstring());
+                        }
+
+                        editor.putStringSet(k, items);
+                        break;
+
+                    case TSTRING:
+                    default:
+                        editor.putString(k, value.tojstring());
+                }
+
+                editor.apply();
+                return NIL;
+            }
+        }
+    }
+
     public class InlineTimer extends LuaTable {
         public Timer timer;
-
-        LuaValue schedule = new schedule();
-        LuaValue cancel = new cancel();
 
         public InlineTimer() {
             this.timer = new Timer();
 
-            set("schedule", schedule);
-            set("cancel", cancel);
+            set("schedule", new schedule());
+            set("cancel", new cancel());
 
             LuaTable m = new LuaTable();
             m.set(CALL, new call());
@@ -370,6 +523,8 @@ public class InlineService extends AccessibilityService {
     }
 
     public class loadModules extends ZeroArgFunction {
+        private AssetManager assets;
+        
         public void loadFile(String path, File file) throws IOException {
             BufferedReader reader = new BufferedReader(new FileReader(file));
 
@@ -378,47 +533,46 @@ public class InlineService extends AccessibilityService {
             if (ch != 65279)
                 reader.reset();
 
-            String p;
-            prepare(env.load(reader, p = path + file.getName()).call(), p);
+            prepare(path, env.load(reader, path).call());
 
         }
 
-        public void loadAsset(String path, AssetManager assets) throws IOException {
+        public void loadAsset(String path) throws IOException {
             InputStream stream = assets.open(path);
             byte[] buffer = new byte[stream.available()];
             stream.read(buffer);
 
-            String p;
-            prepare(env.load(new String(buffer), p = "/assets/" + path).call(), p);
+            prepare(path, env.load(new String(buffer), path).call());
         }
-
-        public void prepare(LuaValue value, String path) {
+        
+        public void prepare(String path, LuaValue value) {
             if (value.isfunction())
                 watchers.put(valueOf(path), value);
         }
-
+        
         public LuaValue call() {
             watchers.clear();
 
             try {
-                for (String path : db.getStringSet("path", defaultPath))
+                for (String path : prefs.getString("path", PATH).split(";"))
                     if (path.startsWith("/assets/")) {
-                        AssetManager assets = getResources().getAssets();
+                        assets = getResources().getAssets();
+                        
                         String assetPath = path.substring(8);
                         String[] files = assets.list(assetPath.substring(0, assetPath.length() - 1));
 
                         if (files.length > 0)
                             for (String file : files)
-                                loadAsset(assetPath + file, assets);
+                                loadAsset(assetPath + file);
                         else
-                            loadAsset(assetPath, assets);
+                            loadAsset(assetPath);
                     } else {
                         File module = new File(path);
 
                         if (module.isDirectory()) {
                             for (File file : module.listFiles())
                                 if (file.isFile())
-                                    loadFile(path, file);
+                                    loadFile(path + file.getName(), file);
                         } else if (module.isFile()) {
                             loadFile(path, module);
                         }
@@ -426,242 +580,86 @@ public class InlineService extends AccessibilityService {
             } catch (Exception e) {
                 logError(e);
             }
+
             return TRUE;
         }
     }
 
-    public class WatchersTable extends LuaTable {
-        public WatchersTable() {
-            LuaTable m = new LuaTable();
-            m.set(INDEX, new get());
-            m.set(NEWINDEX, new set());
-            m.set(LEN, new len());
 
-            this.setmetatable(m);
-        }
-
-        public class get extends TwoArgFunction {
-            public LuaValue call(LuaValue table, LuaValue name) {
-                return watchers.containsKey(name) ? watchers.get(name) : NIL;
-            }
-        }
-
-        public class len extends ZeroArgFunction {
-            public LuaValue call() {
-                return valueOf(watchers.size());
-            }
-        }
-
-        public class set extends ThreeArgFunction {
-            public LuaValue call(LuaValue table, LuaValue name, LuaValue function) {
-                if (function.isnil()) {
-                    if (watchers.containsKey(name))
-                        watchers.remove(name);
-                } else {
-                    watchers.put(name, function);
-                }
-
-                return NIL;
-            }
+    public class getWatcher extends TwoArgFunction {
+        public LuaValue call(LuaValue table, LuaValue name) {
+            return watchers.containsKey(name) ? watchers.get(name) : NIL;
         }
     }
 
-    public class ClipboardTable extends LuaTable {
-        public ClipboardTable() {
-            set("sethtml", new setHtml());
-            set("set", new setClip());
-            set("get", new getClip());
-            set("has", new hasClip());
-            set("clear", new clearClip());
-        }
-
-        public class setHtml extends TwoArgFunction {
-            public LuaValue call(LuaValue text, LuaValue html) {
-                clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.checkjstring(), html.checkjstring()));
-                return NIL;
-            }
-        }
-
-        public class setClip extends OneArgFunction {
-            public LuaValue call(LuaValue text) {
-                clipboard.setPrimaryClip(ClipData.newPlainText(null, text.checkjstring()));
-                return NIL;
-            }
-        }
-
-        public class getClip extends ZeroArgFunction {
-            public LuaValue call() {
-                ClipData clip = clipboard.getPrimaryClip();
-                return valueOf(clip.getItemAt(0).coerceToHtmlText(getApplicationContext()));
-            }
-        }
-
-        public class hasClip extends ZeroArgFunction {
-            public LuaValue call() {
-                return valueOf(clipboard.hasPrimaryClip());
-            }
-        }
-
-        public class clearClip extends ZeroArgFunction {
-            public LuaValue call() {
-                clipboard.clearPrimaryClip();
-                return NIL;
-            }
+    public class lenWatcher extends ZeroArgFunction {
+        public LuaValue call() {
+            return valueOf(watchers.size());
         }
     }
 
-    public class FormatTable extends LuaTable {
-        public FormatTable() {
-            set("fromhtml", new fromHtml());
-            set("fromclipboard", new FromClipboardFlag());
-        }
-
-        public class fromHtml extends OneArgFunction {
-            public LuaValue call(LuaValue html) {
-                clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.checkjstring()));
-                return new FromClipboardFlag();
-            }
-        }
-
-        public class FromClipboardFlag extends LuaValue {
-            public int type() {
-                return 10;
+    public class setWatcher extends ThreeArgFunction {
+        public LuaValue call(LuaValue table, LuaValue name, LuaValue function) {
+            if (function.isnil()) {
+                if (watchers.containsKey(name))
+                    watchers.remove(name);
+            } else {
+                watchers.put(name, function);
             }
 
-            public String typename() {
-                return "formatflag";
-            }
+            return NIL;
         }
     }
 
-    public class DBTable extends LuaTable {
-        public DBTable() {
-            LuaValue put = new putKey();
-            set("put", put);
-            set("contains", new contains());
-            set("getstring", new getString());
-            set("getint", new getInt());
-            set("getfloat", new getFloat());
-            set("getlong", new getLong());
-            set("getboolean", new getBoolean());
-            set("getstringset", new getStringSet());
 
-            LuaTable m = new LuaTable();
-            m.set(LuaValue.INDEX, new getStringDefault());
-            m.set(LuaValue.NEWINDEX, put);
+    public class setHtml extends TwoArgFunction {
+        public LuaValue call(LuaValue text, LuaValue html) {
+            clipboard.setPrimaryClip(ClipData.newHtmlText(null, text.checkjstring(), html.checkjstring()));
+            return NIL;
+        }
+    }
 
-            this.setmetatable(m);
+    public class setClip extends OneArgFunction {
+        public LuaValue call(LuaValue text) {
+            clipboard.setPrimaryClip(ClipData.newPlainText(null, text.checkjstring()));
+            return NIL;
+        }
+    }
+
+    public class getClip extends ZeroArgFunction {
+        public LuaValue call() {
+            ClipData clip = clipboard.getPrimaryClip();
+            return valueOf(clip.getItemAt(0).coerceToHtmlText(getApplicationContext()));
+        }
+    }
+
+    public class hasClip extends ZeroArgFunction {
+        public LuaValue call() {
+            return valueOf(clipboard.hasPrimaryClip());
+        }
+    }
+
+    public class clearClip extends ZeroArgFunction {
+        public LuaValue call() {
+            clipboard.clearPrimaryClip();
+            return NIL;
+        }
+    }
+
+    public class fromHtml extends OneArgFunction {
+        public LuaValue call(LuaValue html) {
+            clipboard.setPrimaryClip(ClipData.newHtmlText(null, "", html.checkjstring()));
+            return new FromClipboardFlag();
+        }
+    }
+
+    public class FromClipboardFlag extends LuaValue {
+        public int type() {
+            return 10;
         }
 
-        public class getStringDefault extends TwoArgFunction {
-            public LuaValue call(LuaValue table, LuaValue key) {
-                return valueOf(db.getString(key.checkjstring(), ""));
-            }
-        }
-
-        public class getString extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getString(key.checkjstring(), defaultVal.isnil() ? "" : defaultVal.checkjstring()));
-            }
-        }
-
-        public class getStringSet extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                HashSet<String> items = new HashSet<String>();
-
-                if (!defaultVal.isnil() && defaultVal.checktable() != null) {
-                    LuaValue k = NIL;
-                    while (true) {
-                        Varargs n = defaultVal.next(k);
-                        if ((k = n.arg1()).isnil() || !k.isint())
-                            break;
-                        LuaValue v = n.arg(2);
-
-                        items.add(v.tojstring());
-                    }
-                }
-
-                LuaTable table = new LuaTable();
-                Set<String> set = db.getStringSet(key.checkjstring(), items);
-
-                int index = 1;
-                for (String item : set) {
-                    table.set(index++, valueOf(item));
-                }
-
-                return table;
-            }
-        }
-
-        public class getInt extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getInt(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().toint()));
-            }
-        }
-
-        public class getFloat extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getFloat(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tofloat()));
-            }
-        }
-
-        public class getLong extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getLong(key.checkjstring(), defaultVal.isnil() ? 0 : defaultVal.checknumber().tolong()));
-            }
-        }
-
-        public class getBoolean extends TwoArgFunction {
-            public LuaValue call(LuaValue key, LuaValue defaultVal) {
-                return valueOf(db.getBoolean(key.checkjstring(), defaultVal.toboolean()));
-            }
-        }
-
-        public class contains extends OneArgFunction {
-            public LuaValue call(LuaValue key) {
-                return valueOf(db.contains(key.checkjstring()));
-            }
-        }
-
-        public class putKey extends ThreeArgFunction {
-            public LuaValue call(LuaValue table, LuaValue key, LuaValue value) {
-                String k = key.checkjstring();
-                
-                SharedPreferences.Editor editor = db.edit();
-                switch (value.type()) {
-                    case TNIL:
-                        editor.remove(k).apply();
-                        break;
-
-                    case TNUMBER:
-                        editor.putFloat(k, value.tofloat());
-                        break;
-                    case TBOOLEAN:
-                        editor.putBoolean(k, value.toboolean());
-                        break;
-                    case TTABLE:
-                        HashSet<String> items = new HashSet<String>();
-
-                        LuaValue q = NIL;
-                        while (true) {
-                            Varargs n = value.next(q);
-                            if ((q = n.arg1()).isnil() || !q.isint())
-                                break;
-                            LuaValue v = n.arg(2);
-                            items.add(v.tojstring());
-                        }
-
-                        editor.putStringSet(k, items);
-                        break;
-
-                    case TSTRING:
-                    default:
-                        editor.putString(k, value.tojstring());
-                }
-                
-                editor.apply();
-                return NIL;
-            }
+        public String typename() {
+            return "formatflag";
         }
     }
 }

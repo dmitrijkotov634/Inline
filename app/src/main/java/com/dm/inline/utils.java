@@ -6,6 +6,7 @@ import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.LuaTable;
 import java.util.List;
 import com.dm.inline.tools.ArgumentTokenizer;
+import org.luaj.vm2.lib.OneArgFunction;
 
 public class utils extends TwoArgFunction {
 
@@ -15,7 +16,8 @@ public class utils extends TwoArgFunction {
         LuaValue library = tableOf();
         library.set("getargs", new getArgs());
         library.set("split", new split());
-
+        library.set("lenght", new lenght());
+        
         env.set("utils", library);
         return library;
     }
@@ -40,6 +42,12 @@ public class utils extends TwoArgFunction {
                 value.set(index++, sub);
             }
             return value;
+        }
+    }
+
+    public class lenght extends OneArgFunction {
+        public LuaValue call(LuaValue string) {
+            return valueOf(string.checkjstring().length());
         }
     }
 }
